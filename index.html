@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Đua vịt trắc nghiệm</title>
+<style>
+:root{--ink:#16324f;--acc:#ff8a00;--ok:#2e9e5b;--bad:#d64045}
+*{box-sizing:border-box}
+body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:var(--ink);background:#e9f6ff;line-height:1.5}
+.wrap{max-width:1000px;margin:0 auto;padding:16px}
+h1{margin:0 0 12px;font-size:1.5rem}
+.card{background:#fff;border-radius:16px;padding:18px;box-shadow:0 2px 10px #0001;margin-bottom:16px}
+.track{position:relative;border-radius:16px;overflow:hidden;background:linear-gradient(#7fd0ff,#2aa3e8);padding:8px 0}
+.lane{position:relative;height:56px;border-bottom:2px dashed #ffffff66}
+.lane:last-child{border-bottom:0}
+.finish{position:absolute;top:0;bottom:0;right:4%;width:14px;background:repeating-conic-gradient(#000 0 25%,#fff 0 50%) 0 0/14px 14px;opacity:.85;z-index:1}
+.duck{position:absolute;top:0;left:2%;display:flex;align-items:center;gap:6px;transition:left .9s cubic-bezier(.3,.9,.3,1);z-index:2;white-space:nowrap}
+.duck .em{font-size:2.2rem;display:inline-block;transform:scaleX(-1);animation:bob 1.2s ease-in-out infinite}
+.duck .tag{background:#fff;border-radius:999px;padding:1px 10px;font-size:.85rem;font-weight:700}
+.duck.me .tag{background:var(--acc);color:#fff}
+@keyframes bob{50%{transform:scaleX(-1) translateY(-5px) rotate(4deg)}}
+.rank{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+.chip{background:#fff;border-radius:999px;padding:4px 12px;font-weight:600;font-size:.9rem}
+input[type=text]{width:100%;padding:12px;font-size:1rem;border:2px solid #cfe3f3;border-radius:10px;margin:10px 0}
+.btn{width:100%;background:var(--acc);color:#fff;border:0;border-radius:10px;padding:12px;font:inherit;font-weight:700;cursor:pointer}
+.meta{display:flex;justify-content:space-between;color:#4a6a86;font-size:.9rem}
+.bar{height:6px;background:#dbe9f5;border-radius:3px;margin:8px 0 14px;overflow:hidden}
+.bar i{display:block;height:100%;background:var(--acc);transform-origin:left}
+.q{font-size:1.2rem;font-weight:700;margin:0 0 12px}
+.opt{display:block;width:100%;text-align:left;padding:12px;margin-bottom:8px;border:2px solid #cfe3f3;border-radius:12px;background:#fff;color:var(--ink);font:inherit;cursor:pointer}
+.opt.ok{border-color:var(--ok);background:#e3f6ea}
+.opt.bad{border-color:var(--bad);background:#fbe5e6}
+.hide{display:none}
+.note{color:#4a6a86;font-size:.85rem}
+body.host .gamecard{display:none}
+body.host h1{font-size:2.2rem}
+body.host .duck .em{font-size:3rem}
+body.host .lane{height:76px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🦆 Đua vịt trắc nghiệm</h1>
+  <div class="card" style="padding:0">
+    <div class="track" id="track"><div class="finish"></div><div id="lanes"></div></div>
+  </div>
+  <div class="rank" id="rank"></div>
+  <p class="note" id="status"></p>
+
+  <div class="card gamecard" style="margin-top:16px">
+    <div id="s-join">
+      <label for="name"><b>Tên của bạn</b></label>
+      <input type="text" id="name" maxlength="16" placeholder="Ví dụ: Minh Anh" autocomplete="off">
+      <button class="btn" id="go">Xuống nước!</button>
+      <p class="note">Mỗi câu đúng, vịt của bạn bơi tới trước. Trả lời càng nhanh càng được thưởng thêm.</p>
+    </div>
+    <div id="s-play" class="hide">
+      <div class="meta"><span id="prog"></span><span id="score"></span></div>
+      <div class="bar"><i id="timer"></i></div>
+      <p class="q" id="qtext"></p>
+      <div id="opts"></div>
+      <b id="fb"></b>
+    </div>
+    <div id="s-end" class="hide"><h2 id="final"></h2><p>Về đích rồi! Xem các bạn khác đang đua trên đường bơi nhé.</p></div>
+  </div>
+</div>
+
+<script type="module">
+import { firebaseConfig, ROOM } from "./config.js";
+import { QUESTIONS, SECONDS_PER_QUESTION as PER_Q } from "./questions.js";
+
+const $ = id => document.getElementById(id);
+const MAX = QUESTIONS.length * 150;
+const HOST = new URLSearchParams(location.search).has("host");
+if (HOST) document.body.classList.add("host");
+
+const DEMO = firebaseConfig.apiKey === "YOUR_API_KEY";
+let myId = localStorage.getItem("duckId") || ("p" + Math.random().toString(36).slice(2, 10));
+localStorage.setItem("duckId", myId);
+
+let players = {};
+let me = { name: "", score: 0, at: 0 };
+let pushScore = async () => {};
+
+/* ---------- Kết nối dữ liệu ---------- */
+if (DEMO) {
+  $("status").textContent = "Chế độ DEMO: vịt máy tự bơi. Cấu hình Firebase trong config.js để chơi nhiều người.";
+  const bots = ["Vịt Bầu", "Vịt Cỏ", "Vịt Xiêm", "Vịt Trời"];
+  bots.forEach((n, i) => players["bot" + i] = { name: n, score: 0, at: i });
+  setInterval(() => {
+    const b = "bot" + Math.floor(Math.random() * bots.length);
+    if (players[b].score < MAX) players[b].score = Math.min(MAX, players[b].score + 100 + Math.floor(Math.random() * 50));
+    render();
+  }, 1800);
+  pushScore = async () => { players[myId] = { ...me }; render(); };
+} else {
+  const { initializeApp } = await import("https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js");
+  const { getDatabase, ref, set, onValue } = await import("https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js");
+  const db = getDatabase(initializeApp(firebaseConfig));
+  onValue(ref(db, `rooms/${ROOM}/players`), s => { players = s.val() || {}; render(); });
+  pushScore = () => set(ref(db, `rooms/${ROOM}/players/${myId}`), { ...me });
+}
+
+/* ---------- Đường đua ---------- */
+const laneEls = {};
+function render() {
+  const ids = Object.keys(players).sort((a, b) => (players[a].at || 0) - (players[b].at || 0));
+  ids.forEach(id => {
+    const p = players[id];
+    let el = laneEls[id];
+    if (!el) {
+      const lane = document.createElement("div"); lane.className = "lane";
+      lane.innerHTML = '<div class="duck"><span class="tag"></span><span class="em">🦆</span></div>';
+      $("lanes").appendChild(lane);
+      el = laneEls[id] = lane.firstChild;
+      el.querySelector(".em").style.filter = `hue-rotate(${(ids.indexOf(id) * 47) % 360}deg)`;
+    }
+    el.classList.toggle("me", id === myId);
+    el.querySelector(".tag").textContent = `${p.name} · ${p.score}`;
+    // Vịt nằm trước tên: đảo thứ tự để vịt ở phía đầu (bên phải)
+    el.style.left = (2 + 80 * Math.min(1, p.score / MAX)) + "%";
+  });
+  const sorted = ids.slice().sort((a, b) => players[b].score - players[a].score || (players[a].at || 0) - (players[b].at || 0));
+  $("rank").innerHTML = sorted.map((id, i) =>
+    `<span class="chip">${["🥇", "🥈", "🥉"][i] || (i + 1) + "."} ${esc(players[id].name)}: ${players[id].score}</span>`).join("");
+}
+function esc(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
+
+/* ---------- Trò chơi ---------- */
+let qi = 0, t0 = 0, tick = null, locked = false;
+const show = id => ["s-join", "s-play", "s-end"].forEach(s => $(s).classList.toggle("hide", s !== id));
+
+function showQ() {
+  if (qi >= QUESTIONS.length) { $("final").textContent = `Điểm của bạn: ${me.score}`; show("s-end"); return; }
+  const Q = QUESTIONS[qi]; locked = false;
+  $("prog").textContent = `Câu ${qi + 1}/${QUESTIONS.length}`;
+  $("score").textContent = `Điểm: ${me.score}`;
+  $("qtext").textContent = Q.q; $("fb").textContent = "";
+  $("opts").innerHTML = "";
+  Q.a.forEach((t, i) => {
+    const b = document.createElement("button"); b.className = "opt";
+    b.textContent = String.fromCharCode(65 + i) + ". " + t;
+    b.onclick = () => answer(i); $("opts").appendChild(b);
+  });
+  t0 = Date.now(); clearInterval(tick);
+  tick = setInterval(() => {
+    const left = Math.max(0, PER_Q - (Date.now() - t0) / 1000);
+    $("timer").style.transform = `scaleX(${left / PER_Q})`;
+    if (left <= 0) answer(-1);
+  }, 100);
+}
+
+function answer(i) {
+  if (locked) return; locked = true; clearInterval(tick);
+  const Q = QUESTIONS[qi], sec = (Date.now() - t0) / 1000, ok = i === Q.c;
+  const gain = ok ? 100 + Math.round(50 * Math.max(0, 1 - sec / PER_Q)) : 0;
+  me.score += gain;
+  [...$("opts").children].forEach((b, k) => { b.disabled = true; if (k === Q.c) b.classList.add("ok"); else if (k === i) b.classList.add("bad"); });
+  $("fb").textContent = ok ? `Chính xác! +${gain}` : (i < 0 ? "Hết giờ!" : "Chưa đúng rồi.");
+  $("fb").style.color = ok ? "var(--ok)" : "var(--bad)";
+  $("score").textContent = `Điểm: ${me.score}`;
+  pushScore();
+  setTimeout(() => { qi++; showQ(); }, 1300);
+}
+
+$("go").onclick = async () => {
+  const n = $("name").value.trim();
+  if (!n) return $("name").focus();
+  me = { name: n, score: 0, at: Date.now() };
+  $("go").disabled = true;
+  await pushScore(); qi = 0; show("s-play"); showQ();
+};
+$("name").addEventListener("keydown", e => { if (e.key === "Enter") $("go").click(); });
+if (DEMO) render();
+</script>
+</body>
+</html>
